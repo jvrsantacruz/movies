@@ -11,6 +11,7 @@ from multiprocessing.pool import ThreadPool
 import jmespath
 from babelfish import Language
 from tabulate import tabulate
+from subliminal.subtitle import get_subtitle_path
 from subliminal import scan_videos, save_subtitles, download_best_subtitles, cache
 from imdb import IMDb, IMDbError
 
@@ -104,12 +105,45 @@ def search_movie(db, title):
     return movie
 
 
+def get_videos_without_subtitle(videos, languages):
+    def _has_subtitle(video):
+        paths = [
+            Path(get_subtitle_path(video.name, lang))
+            for lang in languages
+        ]
+        if not all(path.exists() for path in paths):
+            return video
+
+        logging.info('Skipping %s because already has subtitles', video)
+
+    return [video for video in thread_map(_has_subtitle, videos) if video]
+
+
+def save_subtitle(video, subtitle, language):
+    path = get_subtitle_path(video.name, language)
+    if os.path.exists(path):
+        logging.info('Skipping subs to avoid overriding: %s', path)
+        return
+
+    logging.info('Saving subs at: %s', path)
+    with open(path, 'w', encoding='utf8') as f:
+        f.write(subtitle.text)
+
+
+def save_subtitles(videos, subtitles, languages):
+    def _save_subtitle(video):
+        for language in languages:
+            for subtitle in subtitles[video]:
+                save_subtitle(video, subtitle, language)
+
+    thread_map(_save_subtitle, videos)
+
+
 def download_subtitles(videos):
-    subtitles = download_best_subtitles(
-        videos, {Language('eng'), Language('spa')}
-    )
-    for video in videos:
-        save_subtitles(video, subtitles[video])
+    languages = {Language('eng'), Language('spa')}
+    videos_without_subs = get_videos_without_subtitle(videos, languages)
+    subtitles = download_best_subtitles(videos_without_subs, languages)
+    save_subtitles(videos, subtitles, languages)
 
 
 def print_metadata(metadata):
@@ -142,7 +176,7 @@ def print_metadata(metadata):
     print(tabulate(table, headers, tablefmt='pipe'))
 
 
-if __name__ == '__main__':
+def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--workers', default=10, type=int)
     parser.add_argument('--metadata', action='store_true', default=False)
@@ -184,3 +218,7 @@ if __name__ == '__main__':
     if args.subtitles:
         logging.info('Fetching subtitles for %d videos', len(videos))
         download_subtitles(videos)
+
+
+if __name__ == '__main__':
+    main()
